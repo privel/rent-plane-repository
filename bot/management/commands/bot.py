@@ -7,7 +7,8 @@ from telegram.ext import ApplicationBuilder, MessageHandler, filters, CallbackCo
     CallbackQueryHandler
 from asgiref.sync import sync_to_async
 
-from bot.models import Message, Profile
+from bot.management.commands.dep.commands import check_records_user
+from bot.models import Message, Profile, Rent
 
 
 def log_error(f):
@@ -41,37 +42,26 @@ async def do_echo(update: Update, context: CallbackContext):
     reply_text = "Your ID = {}\n\n{}".format(chat_id, text)
     await update.message.reply_text(text=reply_text)
 
-
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Starts the conversation and asks the user about their gender."""
-    reply_keyboard = [["Boy", "Girl", "Other"]]
+async def start_command(update: Update, context: CallbackContext) -> None:
+    reply_keyboard = [
+        ['Забронировать', 'Настройки'],
+        ['Проверить активные брони']
+    ]
 
     await update.message.reply_text(
-        "Hi! My name is Professor Bot. I will hold a conversation with you. "
-        "Send /cancel to stop talking to me.\n\n"
-        "Are you a boy or a girl?",
-        reply_markup=ReplyKeyboardMarkup(
-            reply_keyboard, one_time_keyboard=True, input_field_placeholder="Boy or Girl?"
-        ),
+        f"Привет {update.message.from_user.username}!\nВыберите операцию",
+        reply_markup=ReplyKeyboardMarkup(reply_keyboard, resize_keyboard=True, one_time_keyboard=True)
     )
 
 
-async def handle_gender_response(update: Update, context: CallbackContext) -> None:
-    """Обрабатывает ответ пользователя на вопрос о поле."""
-    user_response = update.message.text  # Получаем текст сообщения пользователя
+async def handle_book(update: Update, context: CallbackContext) -> None:
+    await update.message.reply_text("Вы выбрали 'Забронировать'. Процесс бронирования начат.")
 
-    if user_response == "Boy":
-        reply_text = "Great! You selected Boy."
-    elif user_response == "Girl":
-        reply_text = "Awesome! You selected Girl."
-    elif user_response == "Other":
-        reply_text = "Good choice! You selected Other."
-    else:
-        # Обработка ответа, если он не соответствует ни одному из вариантов
-        reply_text = "Please select an option from the keyboard."
+async def handle_settings(update: Update, context: CallbackContext) -> None:
+    await update.message.reply_text("Вы выбрали 'Настройки'. Здесь можно изменить параметры.")
 
-    # Отправляем ответ пользователю
-    await update.message.reply_text(reply_text)
+async def handle_check_reservations(update: Update, context: CallbackContext) -> None:
+    await check_records_user(update)  # Вызов функции для проверки активных броней
 
 
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -88,25 +78,15 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         application = ApplicationBuilder().token(settings.TOKEN).build()
 
-        # Команда /start
         application.add_handler(CommandHandler("start", start_command))
 
-        # Обработчик нажатий на inline-кнопки
         application.add_handler(CallbackQueryHandler(button))
 
-        # Обработчик текстовых ответов (для ответа на вопрос о поле)
-        gender_response_handler = MessageHandler(
-            filters.TEXT & filters.Regex("^(Boy|Girl|Other)$"),  # Фильтр для текстовых сообщений
-            handle_gender_response  # Функция для обработки ответа
-        )
-        application.add_handler(gender_response_handler)  # Добавляем его ПЕРЕД do_echo
 
-        # Обработчик остальных текстовых сообщений (do_echo)
-        message_handler = MessageHandler(
-            filters.TEXT & ~filters.Regex("^(Boy|Girl|Other)$") & ~filters.COMMAND,
-            do_echo
-        )
-        application.add_handler(message_handler)
+        application.add_handler(MessageHandler(filters.TEXT & filters.Regex("^Забронировать$"), handle_book))
+        application.add_handler(MessageHandler(filters.TEXT & filters.Regex("^Настройки$"), handle_settings))
+        application.add_handler(
+            MessageHandler(filters.TEXT & filters.Regex("^Проверить активные брони$"), handle_check_reservations))
 
         # Запуск polling
         application.run_polling()
