@@ -2,17 +2,17 @@ from django.db import models
 
 class Profile(models.Model):
     external_id = models.PositiveIntegerField(
-        verbose_name="ID person in TG",
+        verbose_name="ID в телеграм",
         unique = True,
     )
 
-    name = models.TextField(verbose_name="Name TG")
+    name = models.TextField(verbose_name="Имя в телеграм")
 
     def __str__(self):
         return f'#{self.external_id} {self.name}'
 
     class Meta:
-        verbose_name = "TG Profile"
+        verbose_name = "Профиль в телеграм"
 
 
 class Message(models.Model):
