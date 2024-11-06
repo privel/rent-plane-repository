@@ -31,14 +31,14 @@ class Aerodrom(models.Model):
 
 class Rent(models.Model):
     profile = models.ForeignKey(Profile, on_delete=models.PROTECT)
-    # aerodrom = models.CharField(max_length=255, default="Default Aerodrome")
-    # aerodrom = models.ForeignKey(Aerodrom, on_delete=models.PROTECT)
-    type_plane = models.CharField(max_length=255, default="TEST")
+    type_plane = models.CharField(max_length=255, default="TEST", unique=False)
     dateStart = models.DateField(default=None, null=True)
     timeStart = models.TimeField(default=None, null=True)
     timeEnd = models.TimeField(default=None, null=True)
     dateEnd = models.DateField(default=None, null=True)
     created_at = models.DateTimeField(verbose_name="Время создания записи", auto_now_add=True)
+
+
 
     def __str__(self):
         return f'Rent {self.pk} from {self.profile.name}'
@@ -46,20 +46,3 @@ class Rent(models.Model):
     class Meta:
         verbose_name = "Rent plane"
 
-#
-# class Message(models.Model):
-#     profile = models.ForeignKey(
-#         to='bot.Profile',
-#         verbose_name='TG Profile',
-#         on_delete=models.PROTECT,
-#     )
-#     text = models.TextField(verbose_name="Text TG")
-#     created_at = models.DateTimeField(verbose_name="Time of receipt", auto_now_add=True)
-#
-#     def __str__(self):
-#         return f'message {self.pk} from {self.profile}'
-#
-#     class Meta:
-#         verbose_name = "TG Mesasge"
-#         verbose_name_plural = "TG Mesasges"
-#

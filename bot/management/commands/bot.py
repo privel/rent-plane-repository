@@ -6,37 +6,28 @@ from telegram_bot_calendar import DetailedTelegramCalendar, LSTEP
 from datetime import date
 
 from bot.management.commands.dep.commands import aerodrom_available, get_or_create_profile, \
-    create_if_doesnt_exist_rent, delete_rent
+    delete_rent, save_rent
+from bot.management.commands.dep.date.date_command import DateSelectionCommand
+from bot.management.commands.storage import STATE_MAIN_MENU, STATE_BOOK_CHOOSE_PLANE, STATE_BOOK_CHOOSE_DATE_ON_FLY, \
+    STATE_REGISTER_FLY, STATE_REGISTER_CHOOSE_AERODROM, STATE_SETTINGS, STATE_BOOK, user_state_stack, user_times, \
+    user_booking, user_date_selection
 from bot.models import Profile, Rent, Aerodrom
-
-# Состояния пользователя
-STATE_MAIN_MENU = "MAIN_MENU"
-
-# бронирование полёта
-STATE_BOOK = "BOOK"
-STATE_BOOK_CHOOSE_PLANE = "BOOK_CHOOSE_PLANE"
-STATE_BOOK_CHOOSE_DATE_ON_FLY = "BOOK_CHOOSE_TIME_ON_FLY"
-
-# Регистрация полёта
-STATE_REGISTER_FLY = "REGISTER_FLY"
-STATE_REGISTER_CHOOSE_AERODROM = "REGISTER_CHOOSE_AERODROM"
-STATE_REGISTER_CHOOSE_DATE = "REGISTER_CHOOSE_DATE"
-STATE_REGISTER_CHOOSE_TIME = "REGISTER_CHOOSE_TIME"
-
-STATE_SETTINGS = "SETTINGS"
-
-STATE_CHECK_RESERVATIONS = "CHECK_RESERVATIONS"
-STATE_RESERVATION_CHANGE_DELETE = "RESERVATION"
 
 bot = telebot.TeleBot(settings.TOKEN)
 
-# Словарь для хранения дат пользователей
-user_dates = {}
-user_times = {}
-aerodromsList = []
 
-# Словарь для хранения истории состояний пользователей
-user_state_stack = {}
+def select_time(message):
+    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    keyboard.add("09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00")
+    keyboard.add("Назад")
+    bot.send_message(
+        message.chat.id,
+        "Выберите время полёта:",
+        reply_markup=keyboard
+    )
+
+
+date_selection_command = DateSelectionCommand(bot, select_time)
 
 
 def push_user_state(user_id, state):
@@ -72,13 +63,68 @@ def log_error(f):
     return inner
 
 
+# Handle time selection for both timeStart and timeEnd
+@bot.message_handler(
+    func=lambda message: message.text in ["09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00",
+                                          "17:00", "18:00"]
+)
+def handle_time_selection(message):
+    current_time_type = user_date_selection.get(message.chat.id)
+
+    if current_time_type == "timeStart":
+        user_booking["timeStart"] = message.text
+        bot.send_message(
+            message.chat.id,
+            f"Вы выбрали время начала {message.text}.",
+            reply_markup=types.ReplyKeyboardRemove()
+        )
+        # Now prompt for dateEnd
+        date_selection_command.show_calendar(message.chat.id, "dateEnd")
+
+    elif current_time_type == "timeEnd":
+        user_booking["timeEnd"] = message.text
+        bot.send_message(
+            message.chat.id,
+            f"Вы выбрали время окончания {message.text}."
+        )
+        # Finalize booking
+        finalize_booking(message.chat.id, message)
+
+
+def finalize_booking(chat_id, message):
+    """Function to finalize and save the booking to the database."""
+    profile = user_booking.get("profile")
+    if profile:
+        # Create a new Rent entry without replacing existing ones
+        Rent.objects.create(
+            profile=profile,
+            type_plane=user_booking.get("type_plane"),
+            dateStart=user_booking.get("dateStart"),
+            timeStart=user_booking.get("timeStart"),
+            dateEnd=user_booking.get("dateEnd"),
+            timeEnd=user_booking.get("timeEnd")
+        )
+        print(f"Booking saved: {user_booking}")
+        user_booking.clear()
+
+    bot.send_message(chat_id, "Бронирование завершено!")
+
+    # Clear user booking data after saving
+    # save_rent(user_booking)
+
+    show_main_menu(message)
+
+
 @log_error
 @bot.message_handler(commands=['start'])
 def start_command(message):
     push_user_state(message.from_user.id, STATE_MAIN_MENU)
     show_main_menu(message)
+
     profile = get_or_create_profile(message.from_user.id, message.from_user.username)
-    create_if_doesnt_exist_rent(profile)
+    user_booking['profile'] = profile
+
+    # create_if_doesnt_exist_rent(profile)
 
 
 def show_main_menu(message):
@@ -98,7 +144,7 @@ def handle_book(message):
     profile = get_or_create_profile(message.from_user.id, message.from_user.username)
 
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    keyboard.add("Самолёт 1", "Самолёт 2")
+    keyboard.add("Самолёт 1")
     keyboard.add("Отмена")
     bot.send_message(
         message.chat.id,
@@ -122,12 +168,16 @@ def handle_book_choose_plane(message):
         reply_markup=keyboard
     )
 
-    try:
-        Rent.objects.update(profile=profile, type_plane=chosen_plane)
-    except Exception as e:
-        pass
+    # Rent.objects.filter(profile=profile).update(type_plane=chosen_plane)
+    user_booking['type_plane'] = chosen_plane
+    print(user_booking)
+    date_selection_command.show_calendar(message.chat.id, "dateStart")
 
-    calendar_command(message)
+
+@bot.callback_query_handler(func=DetailedTelegramCalendar.func())
+def handle_calendar_selection_dateStart(call):
+    profile = get_or_create_profile(call.message.chat.id, call.message.chat.username)
+    date_selection_command.handle_calendar_selection(call, profile)
 
 
 @bot.message_handler(func=lambda message: message.text == "Регистрация полёта")
@@ -176,59 +226,6 @@ def handle_update_aerodrom(message):
     handle_book_choose_plane(message)
 
 
-def calendar_command(message):
-    current_date = date.today()
-    calendar, step = DetailedTelegramCalendar(
-        min_date=date(current_date.year, 1, 1),
-        max_date=date(current_date.year, 12, 31),  # Ограничиваем выбор только текущим годом
-        current_date=current_date  # Текущая дата как начальный месяц
-
-    ).build()
-
-    bot.send_message(
-        message.chat.id,
-        f"Выберите {LSTEP[step]}",
-        reply_markup=calendar,
-    )
-
-
-@bot.callback_query_handler(func=DetailedTelegramCalendar.func())
-def handle_calendar_selection(call):
-    result, key, step = DetailedTelegramCalendar(min_date=date.today()).process(call.data)
-
-    # Проверяем, выбрана ли допустимая дата
-    if result and result < date.today():
-        # Если дата в прошлом, сообщаем пользователю, что выбор недопустим
-        bot.answer_callback_query(call.id, "Нельзя выбрать дату в прошлом. Пожалуйста, выберите другую дату.")
-        # Оставляем календарь на текущем шаге
-        bot.edit_message_text(
-            f"Выберите {LSTEP[step]}",
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id,
-            reply_markup=key
-        )
-
-    elif not result and key:
-        # Оставляем календарь открытым, если выбор даты еще не завершен
-        bot.edit_message_text(
-            f"Выберите {LSTEP[step]}",
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id,
-            reply_markup=key
-        )
-    elif result:
-        # Сохраняем корректную дату
-        user_dates[call.from_user.id] = result
-        bot.edit_message_text(
-            f"Вы выбрали {result}. Дата сохранена!",
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id
-        )
-
-        # push_user_state(call.from_user.id, STATE_MAIN_MENU)
-        select_time(call.message)
-
-
 @bot.message_handler(func=lambda message: message.text == "Настройки")
 def handle_settings(message):
     push_user_state(message.from_user.id, STATE_SETTINGS)
@@ -242,7 +239,7 @@ def handle_settings(message):
 def handle_cancel(message):
     show_main_menu(message)
 
-    delete_rent(get_or_create_profile(message.from_user.id, message.from_user.username))
+
 
 
 @bot.message_handler(func=lambda message: message.text == "Назад")
@@ -275,27 +272,6 @@ def handle_back(message):
     else:
         # Если состояние не определено, возвращаем на главный экран
         show_main_menu(message)
-
-
-def select_time(message):
-    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    keyboard.add("09:00", "12:00", "15:00", "18:00")
-    keyboard.add("Назад")
-    bot.send_message(
-        message.chat.id,
-        "Выберите время полёта:",
-        reply_markup=keyboard
-    )
-
-
-@bot.message_handler(func=lambda message: message.text in ["09:00", "12:00", "15:00", "18:00"])
-def handle_time_selection_registration(message):
-    user_times[message.from_user.id] = message.text
-    bot.send_message(
-        message.chat.id,
-        f"Вы выбрали время {message.text}. Регистрация завершена."
-    )
-    show_main_menu(message)
 
 
 class Command(BaseCommand):

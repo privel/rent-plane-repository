@@ -60,8 +60,17 @@ def create_if_doesnt_exist_rent(profile):
     except Rent.DoesNotExist:
         Rent.objects.create(profile=profile)
 
+
 def delete_rent(profile):
     try:
         Rent.objects.filter(profile=profile).delete()
     except Rent.DoesNotExist:
         pass
+
+
+def save_rent(dictionary_booking):
+
+    Rent.objects.create(profile=dictionary_booking['profile'], type_plane=dictionary_booking['type_plane'],
+                        dateStart=dictionary_booking['dateStart'], timeStart=dictionary_booking['timeStart'],
+                        timeEnd=dictionary_booking['timeEnd'], dateEnd=dictionary_booking['dateEnd'])
+    print("CREATE BOOKING")
