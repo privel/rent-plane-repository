@@ -3,8 +3,10 @@ from email.message import Message
 from django.contrib import admin
 
 from bot.forms import ProfileForm
-from bot.models import Profile, Rent
-from bot.models import Message
+from bot.models import Profile, Rent, Aerodrom
+
+
+# from bot.models import Message
 
 
 @admin.register(Profile)
@@ -14,12 +16,15 @@ class ProfileAdmin(admin.ModelAdmin):
 
 @admin.register(Rent)
 class RentAdmin(admin.ModelAdmin):
-    list_display = ('id','profile','aerodrom', 'created_at')
+    list_display = ('id','profile','type_plane','dateStart','timeStart','dateEnd','timeEnd', 'created_at')
 
-
-@admin.register(Message)
-class MessageAdmin(admin.ModelAdmin):
-    list_display = ('id', 'profile', 'text', 'created_at')
-    #
+@admin.register(Aerodrom)
+class AerodromAdmin(admin.ModelAdmin):
+    list_display = ('id', 'nameAerodrom', 'available')
+#
+# @admin.register(Message)
+# class MessageAdmin(admin.ModelAdmin):
+#     list_display = ('id', 'profile', 'text', 'created_at')
+#     #
     # def get_queryset(self, request):
     #     return

@@ -35,7 +35,33 @@
 #                                         keyboard,
 #                                         resize_keyboard=True,
 #                                         one_time_keyboard=True), )
+from bot.models import Aerodrom, Profile, Rent
 
 
+def aerodrom_available():
+    aerodrom_names = Aerodrom.objects.filter(available=True).values_list('nameAerodrom', flat=True)
+
+    return list(aerodrom_names)
 
 
+# Вспомогательная функция для получения или создания профиля
+def get_or_create_profile(user_id, username):
+    try:
+        profile = Profile.objects.get(external_id=user_id)
+    except Profile.DoesNotExist:
+        profile = Profile.objects.create(external_id=user_id, name=username)
+        print(f"{profile} created user")
+    return profile
+
+
+def create_if_doesnt_exist_rent(profile):
+    try:
+        Rent.objects.get(profile=profile)
+    except Rent.DoesNotExist:
+        Rent.objects.create(profile=profile)
+
+def delete_rent(profile):
+    try:
+        Rent.objects.filter(profile=profile).delete()
+    except Rent.DoesNotExist:
+        pass
