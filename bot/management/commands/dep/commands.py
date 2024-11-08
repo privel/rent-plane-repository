@@ -20,6 +20,15 @@ def get_or_create_profile(user_id, username):
         print(f"{profile} created user")
     return profile
 
+# Вспомогательная функция для получения или создания профиля
+def get_or_create_plane(type_plane):
+    try:
+        plane = Planes.objects.get(type_plane=type_plane)
+    except Planes.DoesNotExist:
+        plane = Planes.objects.create(type_plane=type_plane, available=True)
+        print(f"{plane} created user")
+    return plane
+
 
 def create_if_doesnt_exist_rent(profile):
     try:
@@ -48,6 +57,18 @@ def get_type_available_plane():
     for plane in planes:
         if plane.available:
             planes_list.append(plane.type_plane)
+
+    if not planes_list:
+        return (["Сейчас нет доступного самолёта !"])
+    return planes_list
+
+
+def get_type_available_plane_second():
+    planes = Planes.objects.all()
+    planes_list = []
+    for plane in planes:
+        if plane.available:
+            planes_list.append(plane.type_plane + "‎")
 
     if not planes_list:
         return (["Сейчас нет доступного самолёта !"])
