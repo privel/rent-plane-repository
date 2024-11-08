@@ -1,0 +1,140 @@
+def handle_check_book(message):
+    text = "Выберите дату для просмотра брони"
+    trainer_type = "example_type"  # Укажите здесь нужный тип
+
+    send_calendar(
+        chat_id=message.chat.id,
+        text=text,
+        trainer_type=trainer_type,
+        year=None,
+        month=None,
+        message_id=None  # message_id теперь не используется для редактирования
+    )
+
+def send_calendar(chat_id, text, trainer_type, year=None, month=None, message_id=None):
+    now = datetime.now()
+    if year is None:
+        year = now.year
+    if month is None:
+        month = now.month
+
+    markup = InlineKeyboardMarkup()
+    markup.row(InlineKeyboardButton(f'{calendar.month_name[month]} {year}', callback_data="calendar_ignore"))
+
+    days = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
+    markup.row(*[InlineKeyboardButton(day, callback_data="calendar_ignore") for day in days])
+
+    month_days = calendar.monthcalendar(year, month)
+    for week in month_days:
+        row = []
+        for day in week:
+            if day == 0:
+                row.append(InlineKeyboardButton(" ", callback_data="calendar_ignore"))
+            else:
+                row.append(InlineKeyboardButton(str(day), callback_data=f"calendar_{year}-{month:02d}-{day:02d}_{trainer_type}"))
+        markup.row(*row)
+
+    markup.row(
+        InlineKeyboardButton("⬅️", callback_data=f"calendar_prev_{year}_{month}_{trainer_type}"),
+        InlineKeyboardButton("➡️", callback_data=f"calendar_next_{year}_{month}_{trainer_type}")
+    )
+
+    btn_back = InlineKeyboardButton("🔙 Назад", callback_data="throw")
+    markup.add(btn_back)
+
+    if message_id:
+        try:
+            bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=text, reply_markup=markup)
+        except Exception as e:
+            print(f"Error editing message: {e}")
+            bot.send_message(chat_id=chat_id, text=text, reply_markup=markup)
+    else:
+        bot.send_message(chat_id=chat_id, text=text, reply_markup=markup)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("calendar_"))
+def callback_calendar(call):
+    parts = call.data.split("_")
+    action = parts[1]
+
+    if action == "ignore":
+        return
+    elif action == "prev":
+        year = int(parts[2])
+        month = int(parts[3]) - 1
+        if month == 0:
+            month = 12
+            year -= 1
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+        send_calendar(call.message.chat.id, "🗓 Выберите день", parts[4], year, month,
+                      message_id=call.message.message_id)
+
+    elif action == "next":
+        year = int(parts[2])
+        month = int(parts[3]) + 1
+        if month == 13:
+            month = 1
+            year += 1
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+        send_calendar(call.message.chat.id, "🗓 Выберите день", parts[4], year, month,
+                      message_id=call.message.message_id)
+
+    else:
+        date_str = action
+        trainer_type = parts[2]
+
+        selected_date = datetime.strptime(date_str, "%Y-%m-%d")
+        now = datetime.now()
+
+        if selected_date.date() < now.date():
+            bot.answer_callback_query(call.id, "❌ Эта дата уже прошла. Пожалуйста, выберите другую дату.",
+                                      show_alert=True)
+            return
+
+        # Process selected date here or call further functions based on trainer_type
+
+
+def send_time_selection(chat_id, date_str, trainer_type, message_id=None):
+    markup = InlineKeyboardMarkup()
+
+    time_intervals_weekends = [
+        "11:00-12:00", "12:00-13:00", "13:00-14:00",
+        "14:00-15:00", "15:00-16:00", "16:00-17:00",
+        "17:00-18:00", "18:00-19:00", "19:00-20:00",
+        "20:00-21:00"
+    ]
+
+    time_intervals_weekdays = [
+        "11:00-12:00", "12:00-13:00", "13:00-14:00",
+        "14:00-15:00", "15:00-16:00", "16:00-17:00",
+        "17:00-18:00", "18:00-19:00", "19:00-20:00"
+    ]
+
+    day_date = datetime.strptime(date_str, '%Y-%m-%d')
+    day_name = day_date.strftime('%A')
+
+    now = datetime.now()
+
+    if day_date.date() == now.date():
+        current_time = now.time()
+    else:
+        current_time = None
+
+    if day_name in ["Saturday", "Sunday"]:
+        time_intervals = time_intervals_weekends
+    else:
+        time_intervals = time_intervals_weekdays
+    for t in time_intervals:
+        start_time_str = t.split("-")[0]
+        start_time = datetime.strptime(start_time_str, '%H:%M').time()
+        if current_time and start_time <= current_time:
+            markup.add(InlineKeyboardButton(f"{t} (недоступно)", callback_data="calendar_ignore"))
+        else:
+            markup.add(InlineKeyboardButton(t, callback_data=f"time_{date_str}_{start_time_str}_{trainer_type}"))
+
+    btn_back = InlineKeyboardButton("🔙 Назад", callback_data="throw")
+    markup.add(btn_back)
+
+    bot.edit_message_text(chat_id=chat_id, message_id=message_id,
+                          text=f"🗓 Вы выбрали {day_date.strftime('%d.%m.%Y')}. 🔽 Выберите время:", reply_markup=markup)
+

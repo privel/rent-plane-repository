@@ -53,6 +53,7 @@ class DateSelectionCommand:
                 message_id=call.message.message_id,
                 reply_markup=key
             )
+
         elif not result and key:
             self.bot.edit_message_text(
                 f"Выберите {LSTEP[step]}",
@@ -66,7 +67,6 @@ class DateSelectionCommand:
 
             # Store date selection in user_booking
             user_booking[date_type] = field_to_update[date_type]
-            print(user_booking)
 
             self.bot.edit_message_text(
                 f"Вы выбрали {result}. Дата сохранена!",

@@ -15,7 +15,8 @@ class Profile(models.Model):
         return f'#{self.external_id} {self.name}'
 
     class Meta:
-        verbose_name = "Профиль в телеграм"
+        verbose_name = "Профиль в телеграме"
+        verbose_name_plural = "Профили в телеграме"
 
 
 class Aerodrom(models.Model):
@@ -44,5 +45,17 @@ class Rent(models.Model):
         return f'Rent {self.pk} from {self.profile.name}'
 
     class Meta:
-        verbose_name = "Rent plane"
+        verbose_name = "Бронь самолета"
+        verbose_name_plural="Бронь самолётов"
 
+
+class Planes(models.Model):
+    type_plane = models.CharField(max_length=255, default="Plane 1", verbose_name="Тип")
+    available = models.BooleanField(default=True, verbose_name="Доступен")
+
+    def __str__(self):
+        return f"Plane {self.pk} from {self.type_plane}"
+
+    class Meta:
+        verbose_name = "Самолёт"
+        verbose_name_plural = "Самолёты"

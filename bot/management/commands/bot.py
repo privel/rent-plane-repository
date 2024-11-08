@@ -1,28 +1,42 @@
+from pyexpat.errors import messages
+
 import telebot
 from telebot import types
 from django.conf import settings
 from django.core.management.base import BaseCommand
-from telegram_bot_calendar import DetailedTelegramCalendar, LSTEP
-from datetime import date
+from telegram_bot_calendar import DetailedTelegramCalendar
 
-from bot.management.commands.dep.commands import aerodrom_available, get_or_create_profile, \
-    delete_rent, save_rent
+from bot.management.commands.dep.commands import aerodrom_available, get_or_create_profile, get_type_available_plane, \
+    is_time_slot_available, get_unavailable_times, check_available_rent
 from bot.management.commands.dep.date.date_command import DateSelectionCommand
 from bot.management.commands.storage import STATE_MAIN_MENU, STATE_BOOK_CHOOSE_PLANE, STATE_BOOK_CHOOSE_DATE_ON_FLY, \
-    STATE_REGISTER_FLY, STATE_REGISTER_CHOOSE_AERODROM, STATE_SETTINGS, STATE_BOOK, user_state_stack, user_times, \
-    user_booking, user_date_selection
-from bot.models import Profile, Rent, Aerodrom
+    STATE_REGISTER_FLY, STATE_REGISTER_CHOOSE_AERODROM, STATE_SETTINGS, STATE_BOOK, user_state_stack, \
+    user_booking, user_date_selection, available_booking_time, STATE_CHECK_ACTIVE_BOOKING
+from bot.models import Rent
 
 bot = telebot.TeleBot(settings.TOKEN)
 
 
 def select_time(message):
+    chosen_date = user_booking.get("dateStart")  # Используем выбранную дату для бронирования
+    type_plane = user_booking.get("type_plane")  # Используем выбранный тип самолета
+
+    if not chosen_date or not type_plane:
+        bot.send_message(message.chat.id, "Выберите дату и тип самолета сначала.")
+        return
+
+    unavailable_times = get_unavailable_times(chosen_date, type_plane)
+    available_times = [time for time in available_booking_time if time not in unavailable_times]
+
+    # Создаем клавиатуру с оставшимися доступными временами
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    keyboard.add("09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00")
+    for time in available_times:
+        keyboard.add(time)
+
     keyboard.add("Назад")
     bot.send_message(
         message.chat.id,
-        "Выберите время полёта:",
+        "Выберите доступное время полета:",
         reply_markup=keyboard
     )
 
@@ -63,10 +77,8 @@ def log_error(f):
     return inner
 
 
-# Handle time selection for both timeStart and timeEnd
 @bot.message_handler(
-    func=lambda message: message.text in ["09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00",
-                                          "17:00", "18:00"]
+    func=lambda message: message.text in available_booking_time
 )
 def handle_time_selection(message):
     current_time_type = user_date_selection.get(message.chat.id)
@@ -78,7 +90,7 @@ def handle_time_selection(message):
             f"Вы выбрали время начала {message.text}.",
             reply_markup=types.ReplyKeyboardRemove()
         )
-        # Now prompt for dateEnd
+        # Теперь выводим доступные слоты для времени окончания
         date_selection_command.show_calendar(message.chat.id, "dateEnd")
 
     elif current_time_type == "timeEnd":
@@ -87,31 +99,68 @@ def handle_time_selection(message):
             message.chat.id,
             f"Вы выбрали время окончания {message.text}."
         )
-        # Finalize booking
         finalize_booking(message.chat.id, message)
 
 
+# Handle time selection for both timeStart and timeEnd
+# @bot.message_handler(
+#     func=lambda message: message.text in available_booking_time
+# )
+# def handle_time_selection(message):
+#     current_time_type = user_date_selection.get(message.chat.id)
+#
+#     if current_time_type == "timeStart":
+#         user_booking["timeStart"] = message.text
+#         bot.send_message(
+#             message.chat.id,
+#             f"Вы выбрали время начала {message.text}.",
+#             reply_markup=types.ReplyKeyboardRemove()
+#         )
+#         # Now prompt for dateEnd
+#         date_selection_command.show_calendar(message.chat.id, "dateEnd")
+#
+#     elif current_time_type == "timeEnd":
+#         user_booking["timeEnd"] = message.text
+#         bot.send_message(
+#             message.chat.id,
+#             f"Вы выбрали время окончания {message.text}."
+#         )
+#         # Finalize booking
+#         finalize_booking(message.chat.id, message)
+
 def finalize_booking(chat_id, message):
-    """Function to finalize and save the booking to the database."""
+    """Проверка доступности и завершение бронирования"""
     profile = user_booking.get("profile")
-    if profile:
-        # Create a new Rent entry without replacing existing ones
-        Rent.objects.create(
-            profile=profile,
-            type_plane=user_booking.get("type_plane"),
-            dateStart=user_booking.get("dateStart"),
-            timeStart=user_booking.get("timeStart"),
-            dateEnd=user_booking.get("dateEnd"),
-            timeEnd=user_booking.get("timeEnd")
-        )
-        print(f"Booking saved: {user_booking}")
-        user_booking.clear()
+    date_start = user_booking.get("dateStart")
+    time_start = user_booking.get("timeStart")
+    date_end = user_booking.get("dateEnd")
+    time_end = user_booking.get("timeEnd")
+    type_plane = user_booking.get("type_plane")
 
-    bot.send_message(chat_id, "Бронирование завершено!")
+    bookings = Rent.objects.filter(profile=profile)
 
-    # Clear user booking data after saving
-    # save_rent(user_booking)
+    if True:
+        if (bookings.exists() and bookings.all().count() < 3) or not bookings.exists():
+            # Проверка доступности слота с учетом типа самолета и временных пересечений
+            if is_time_slot_available(profile, date_start, time_start, date_end, time_end, type_plane):
+                Rent.objects.create(
+                    profile=profile,
+                    type_plane=type_plane,
+                    dateStart=date_start,
+                    timeStart=time_start,
+                    dateEnd=date_end,
+                    timeEnd=time_end
+                )
+                bot.send_message(chat_id, "Бронирование завершено!")
+                print(f"Booking saved: {user_booking}")
+            else:
+                bot.send_message(chat_id,
+                                 "Выбранное время для этого типа самолета уже занято. Пожалуйста, выберите другой интервал или самолет.")
+        else:
+            bot.send_message(chat_id, "Слишком много брони у одного аккаунта!")
 
+    # Очищаем данные после завершения
+    user_booking.clear()
     show_main_menu(message)
 
 
@@ -122,6 +171,7 @@ def start_command(message):
     show_main_menu(message)
 
     profile = get_or_create_profile(message.from_user.id, message.from_user.username)
+
     user_booking['profile'] = profile
 
     # create_if_doesnt_exist_rent(profile)
@@ -136,15 +186,19 @@ def show_main_menu(message):
     keyboard.add("Проверить активные брони")
     bot.send_message(message.chat.id, "Главное меню: Выберите операцию", reply_markup=keyboard)
 
+    get_type_available_plane()
+
 
 @bot.message_handler(func=lambda message: message.text == "Забронировать")
 def handle_book(message):
     push_user_state(message.from_user.id, STATE_BOOK_CHOOSE_PLANE)
 
-    profile = get_or_create_profile(message.from_user.id, message.from_user.username)
+    # profile = get_or_create_profile(message.from_user.id, message.from_user.username)
 
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    keyboard.add("Самолёт 1")
+    for i in get_type_available_plane():
+        keyboard.add(i)
+
     keyboard.add("Отмена")
     bot.send_message(
         message.chat.id,
@@ -153,11 +207,14 @@ def handle_book(message):
     )
 
 
-@bot.message_handler(func=lambda message: message.text in ["Самолёт 1", "Самолёт 2"])
+# @bot.message_handler(func=lambda message: message.text in ["Самолёт 1", "Самолёт 2"])
+@bot.message_handler(func=lambda message: message.text in (
+        get_type_available_plane() if get_type_available_plane() != ["Сейчас нет доступного самолёта !"] else [
+            'super random field oi oi oi Butcher ']))
 def handle_book_choose_plane(message):
     push_user_state(message.from_user.id, STATE_BOOK_CHOOSE_DATE_ON_FLY)
 
-    profile = get_or_create_profile(message.from_user.id, message.from_user.username)
+    # profile = get_or_create_profile(message.from_user.id, message.from_user.username)
 
     chosen_plane = message.text
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
@@ -199,11 +256,11 @@ def handle_book_choose_plane(message):
     push_user_state(message.from_user.id, STATE_REGISTER_CHOOSE_AERODROM)
     chosen_plane = message.text
 
-    aerodromsList = aerodrom_available()
+    aerodromeList = aerodrom_available()
 
-    print(aerodromsList)
+    print(aerodromeList)
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    for nameaero in aerodromsList:
+    for nameaero in aerodromeList:
         keyboard.add(nameaero)
 
     keyboard.add("Обновить", "Назад")
@@ -235,20 +292,86 @@ def handle_settings(message):
                      reply_markup=keyboard)
 
 
+
+
+@bot.message_handler(func=lambda message: message.text == "Проверить активные брони")
+def handle_check_booking(message):
+    push_user_state(message.from_user.id, STATE_CHECK_ACTIVE_BOOKING)
+    bot.send_message(message.chat.id, "Идет проверка...")
+    profile = get_or_create_profile(message.from_user.id, message.from_user.username)
+    show_items = check_available_rent(profile)
+
+    if show_items[0] == 0:
+        bot.send_message(message.chat.id, "Активных бронирований не найдено.")
+        return
+
+    # Создаем текст и кнопки для каждого бронирования
+    booking_details_text = "Ваши активные брони:\n\n"
+    keyboard = types.InlineKeyboardMarkup()
+    for i, booking_detail in enumerate(show_items[1]):
+        booking_pk = booking_detail.split()[1]  # Получаем только ID из текста
+        booking_details_text += booking_detail  # Добавляем каждый элемент в общий текст
+
+        # Убираем префикс и передаем только PK в callback_data
+        btn_change = types.InlineKeyboardButton(f'Изменить №{i + 1}', callback_data=f'change_booking_{booking_pk}')
+        keyboard.add(btn_change)
+
+    bot.send_message(message.chat.id, booking_details_text, reply_markup=keyboard)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('change_booking_'))
+def handle_change_booking(call):
+    # Извлекаем только числовой PK из callback_data
+    _, booking_pk = call.data.split('_', 1)
+    print(f"[DEBUG] Selected booking PK for change: {booking_pk}")
+
+    bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id,
+                          text=f"Вы выбрали запись с PK={booking_pk}. Что вы хотите сделать?")
+
+    # Кнопки для удаления или отмены
+    btn_delete = types.InlineKeyboardButton('Удалить', callback_data=f'delete_booking_{booking_pk}')
+    btn_cancel = types.InlineKeyboardButton('Отмена', callback_data='cancel_booking')
+    keyboard = types.InlineKeyboardMarkup().add(btn_delete, btn_cancel)
+
+    bot.send_message(call.message.chat.id, "Выберите действие:", reply_markup=keyboard)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('delete_booking_'))
+def handle_delete_booking(call):
+    booking_pk = call.data.split('_')[3]  # Получаем только PK
+    print(booking_pk)
+    try:
+        Rent.objects.get(pk=int(booking_pk)).delete()
+        bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id,
+                              text="Запись успешно удалена.")
+    except Rent.DoesNotExist:
+        bot.send_message(call.message.chat.id, "Ошибка: Запись не найдена или уже удалена.")
+    except Exception as e:
+        bot.send_message(call.message.chat.id, f"Ошибка при удалении записи: {e}")
+
+    # Возврат в главное меню после удаления
+    show_main_menu(call.message)
+
+
+
+@bot.callback_query_handler(func=lambda call: call.data == 'cancel_booking')
+def handle_cancel_booking(call):
+    # Возврат в главное меню при отмене
+    bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id,
+                          text="Действие отменено.")
+    show_main_menu(call.message)
+
+
+
 @bot.message_handler(func=lambda message: message.text == "Отмена")
 def handle_cancel(message):
+    user_booking.clear()
     show_main_menu(message)
-
-
 
 
 @bot.message_handler(func=lambda message: message.text == "Назад")
 def handle_back(message):
-    # Получаем текущее состояние после удаления верхнего элемента стека
     previous_state = pop_user_state(message.from_user.id)
-
-    # Отладочный вывод
-    # print(f"[DEBUG] BACK BUTTON: previous_state = {previous_state}")
 
     # Проверяем состояние после возврата и выводим нужное меню
     if previous_state == STATE_MAIN_MENU:

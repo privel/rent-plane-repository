@@ -1,41 +1,8 @@
-# from asgiref.sync import sync_to_async
-# from telegram.ext import CallbackContext
-#
-# from bot.models import Message, Profile, Rent
-# from telegram import Update, ReplyKeyboardMarkup
-#
-#
-# async def check_records_user(update: Update, context: CallbackContext):
-#     keyboard = [
-#         ['Изменить'],
-#         ['Назад'],
-#     ]
-#
-#     try:
-#         # Retrieve the profile asynchronously
-#         profile = await sync_to_async(Profile.objects.get)(external_id=update.message.chat_id)
-#
-#         # Retrieve all Rent records related to this profile
-#         rent_records = await sync_to_async(list)(Rent.objects.filter(profile=profile))
-#
-#         # Check if there are any records and construct the response
-#         if rent_records:
-#             reply_text = f"Активные брони:\n" + "\n".join(
-#                 f"Rent ID: {rent.pk},\n Aerodrom: {rent.aerodrom},\n Created At: {rent.created_at} \n\n"
-#                 for rent in rent_records
-#             )
-#         else:
-#             reply_text = "Нет активных записей"
-#
-#     except Profile.DoesNotExist:
-#         reply_text = "Профиль не найден"
-#
-#     await update.message.reply_text(reply_text,
-#                                     reply_markup=ReplyKeyboardMarkup(
-#                                         keyboard,
-#                                         resize_keyboard=True,
-#                                         one_time_keyboard=True), )
-from bot.models import Aerodrom, Profile, Rent
+from datetime import datetime, timedelta
+
+from bot.models import Aerodrom, Profile, Rent, Planes
+
+from django.db.models import Q
 
 
 def aerodrom_available():
@@ -69,8 +36,87 @@ def delete_rent(profile):
 
 
 def save_rent(dictionary_booking):
-
     Rent.objects.create(profile=dictionary_booking['profile'], type_plane=dictionary_booking['type_plane'],
                         dateStart=dictionary_booking['dateStart'], timeStart=dictionary_booking['timeStart'],
                         timeEnd=dictionary_booking['timeEnd'], dateEnd=dictionary_booking['dateEnd'])
     print("CREATE BOOKING")
+
+
+def get_type_available_plane():
+    planes = Planes.objects.all()
+    planes_list = []
+    for plane in planes:
+        if plane.available:
+            planes_list.append(plane.type_plane)
+
+    if not planes_list:
+        return (["Сейчас нет доступного самолёта !"])
+    return planes_list
+
+
+def is_time_slot_available(profile, date_start, time_start, date_end, time_end, type_plane):
+    """Проверяет доступность временного слота для конкретной даты, времени и типа самолета."""
+
+    # Преобразуем time_start и time_end в объекты datetime.time
+    time_start = datetime.strptime(time_start, "%H:%M").time() if isinstance(time_start, str) else time_start
+    time_end = datetime.strptime(time_end, "%H:%M").time() if isinstance(time_end, str) else time_end
+
+    overlapping_bookings = Rent.objects.filter(
+        type_plane=type_plane,
+        dateStart__lte=date_end,
+        dateEnd__gte=date_start,
+    ).exclude(
+        profile=profile,
+        dateStart=date_start,
+        timeStart=time_start,
+        dateEnd=date_end,
+        timeEnd=time_end
+    )
+
+    for booking in overlapping_bookings:
+        if (
+                (booking.dateStart == date_start and booking.timeStart <= time_end and booking.timeEnd >= time_start) or
+                (booking.dateEnd == date_end and booking.timeStart <= time_end and booking.timeEnd >= time_start)
+        ):
+            return False
+    return True
+
+
+def get_unavailable_times(date, type_plane):
+    """Возвращает список занятых временных слотов для конкретной даты и типа самолета."""
+    bookings = Rent.objects.filter(
+        dateStart__lte=date,
+        dateEnd__gte=date,
+        type_plane=type_plane
+    ).values_list('timeStart', 'timeEnd')
+
+    unavailable_times = set()
+    for time_start, time_end in bookings:
+        current_time = time_start
+        while current_time < time_end:
+            unavailable_times.add(current_time.strftime("%H:%M"))
+            current_time = (datetime.combine(date, current_time) + timedelta(hours=1)).time()
+
+    return unavailable_times
+
+def check_available_rent(profile):
+    bookings = Rent.objects.filter(profile=profile)
+    counter = 0
+    books = []
+    if bookings.exists():
+        for booking in bookings:
+            counter += 1
+            booking_details = (
+                f"№{counter} {booking.pk}\n"
+                f" Дата начала: {booking.dateStart}\n"
+                f" Время начала: {booking.timeStart}\n"
+                f" Дата окончания: {booking.dateEnd}\n"
+                f" Время окончания: {booking.timeEnd}\n"
+                f" Тип самолета: {booking.type_plane}\n\n"
+            )
+            books.append(booking_details)
+        print(f"Found {counter} bookings for profile {profile.external_id}.")  # Логируем найденные записи
+        return (counter, books)
+    else:
+        print(f"No active bookings found for profile {profile.external_id}.")  # Логируем отсутствие записей
+        return (0, ["Активных бронирований не найдено."])

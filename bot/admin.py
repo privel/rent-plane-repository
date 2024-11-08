@@ -3,7 +3,7 @@ from email.message import Message
 from django.contrib import admin
 
 from bot.forms import ProfileForm
-from bot.models import Profile, Rent, Aerodrom
+from bot.models import Profile, Rent, Planes
 
 
 # from bot.models import Message
@@ -18,10 +18,11 @@ class ProfileAdmin(admin.ModelAdmin):
 class RentAdmin(admin.ModelAdmin):
     list_display = ('id','profile','type_plane','dateStart','timeStart','dateEnd','timeEnd', 'created_at')
 
-@admin.register(Aerodrom)
-class AerodromAdmin(admin.ModelAdmin):
-    list_display = ('id', 'nameAerodrom', 'available')
-#
+@admin.register(Planes)
+class PlanesAdmin(admin.ModelAdmin):
+    list_display = ('id', 'type_plane', 'available')
+
+
 # @admin.register(Message)
 # class MessageAdmin(admin.ModelAdmin):
 #     list_display = ('id', 'profile', 'text', 'created_at')

@@ -18,8 +18,7 @@ STATE_CHECK_RESERVATIONS = "CHECK_RESERVATIONS"
 STATE_RESERVATION_CHANGE_DELETE = "RESERVATION"
 
 
-
-
+STATE_CHECK_ACTIVE_BOOKING = "CHECK_ACTIVE_BOOKING"
 
 # Словарь для хранения дат пользователей
 user_dates = {}
@@ -30,5 +29,7 @@ aerodromsList = []
 user_state_stack = {}
 user_date_selection = {}
 
-
 user_booking = {}
+
+available_booking_time = ["09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00",
+                          "17:00", "18:00"]
