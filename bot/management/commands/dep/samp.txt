@@ -138,3 +138,151 @@ def send_time_selection(chat_id, date_str, trainer_type, message_id=None):
     bot.edit_message_text(chat_id=chat_id, message_id=message_id,
                           text=f"🗓 Вы выбрали {day_date.strftime('%d.%m.%Y')}. 🔽 Выберите время:", reply_markup=markup)
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+def select_time_register(message):
+    user_id = message.chat.id
+    current_hour = datetime.now().hour  # Устанавливаем час на текущее время
+    # Инициализируем значение счётчиков для пользователя: текущий час и минуты
+    user_time[user_id] = {'hour': current_hour, 'minute': 0}
+
+    # Отправляем сообщение с кнопками для выбора часа
+    sent_message = bot.send_message(
+        message.chat.id,
+        "Укажите время полёта \nУкажите час",
+        reply_markup=create_hour_keyboard(user_time[user_id]['hour'])
+    )
+    # Сохраняем ID сообщения, чтобы можно было его удалить позже
+    user_time[user_id]['message_id'] = sent_message.message_id
+
+
+def create_hour_keyboard(hour):
+    """Создаёт клавиатуру для установки часов"""
+    keyboard = types.InlineKeyboardMarkup()
+
+    # Кнопки для увеличения, уменьшения и подтверждения времени
+    add_five = types.InlineKeyboardButton(text="+5", callback_data="add_five_hour")
+    add_one = types.InlineKeyboardButton(text="+1", callback_data="add_one_hour")
+    hour_counter = types.InlineKeyboardButton(text=f"{hour:02d}", callback_data="hour_counter")
+    minus_five = types.InlineKeyboardButton(text="-5", callback_data="minus_five_hour")
+    minus_one = types.InlineKeyboardButton(text="-1", callback_data="minus_one_hour")
+    confirm = types.InlineKeyboardButton(text="Подтвердить", callback_data="confirm_hour")
+
+    # Добавляем кнопки в клавиатуру
+    keyboard.row(minus_five, hour_counter, add_five)
+    keyboard.row(minus_one, confirm, add_one)
+
+    return keyboard
+
+
+def create_minute_keyboard(minute):
+    """Создаёт клавиатуру для установки минут"""
+    keyboard = types.InlineKeyboardMarkup()
+
+    # Кнопки для увеличения/уменьшения на 5 и 1 минуту, а также подтверждение времени
+    add_five = types.InlineKeyboardButton(text="+5", callback_data="add_five_minute")
+    add_one = types.InlineKeyboardButton(text="+1", callback_data="add_one_minute")
+    minute_counter = types.InlineKeyboardButton(text=f"{minute:02d}", callback_data="minute_counter")
+    minus_five = types.InlineKeyboardButton(text="-5", callback_data="minus_five_minute")
+    minus_one = types.InlineKeyboardButton(text="-1", callback_data="minus_one_minute")
+    confirm = types.InlineKeyboardButton(text="Подтвердить", callback_data="confirm_minute")
+
+    # Добавляем кнопки в клавиатуру
+    keyboard.row(minus_five, minute_counter, add_five)
+    keyboard.row(minus_one, confirm, add_one)
+
+    return keyboard
+
+
+@bot.callback_query_handler(
+    func=lambda call: call.data in ["add_five_hour", "add_one_hour", "minus_five_hour", "minus_one_hour",
+                                    "confirm_hour"])
+def handle_hour_buttons(call):
+    user_id = call.message.chat.id
+    previous_hour = user_time[user_id]['hour']  # Запоминаем текущее значение
+
+    # Инициализируем значение счётчика, если оно отсутствует
+    if user_id not in user_time:
+        user_time[user_id] = {'hour': datetime.now().hour, 'minute': 0}
+
+    # Обработка нажатия на кнопки для часов
+    if call.data == "add_five_hour":
+        user_time[user_id]['hour'] = (user_time[user_id]['hour'] + 5) % 24
+    elif call.data == "add_one_hour":
+        user_time[user_id]['hour'] = (user_time[user_id]['hour'] + 1) % 24
+    elif call.data == "minus_five_hour":
+        user_time[user_id]['hour'] = (user_time[user_id]['hour'] - 5) % 24 if user_time[user_id]['hour'] >= 5 else 0
+    elif call.data == "minus_one_hour":
+        user_time[user_id]['hour'] = (user_time[user_id]['hour'] - 1) % 24 if user_time[user_id]['hour'] > 0 else 0
+    elif call.data == "confirm_hour":
+        # Удаляем сообщение с выбором часа
+        bot.delete_message(call.message.chat.id, user_time[user_id]['message_id'])
+        # Отправляем сообщение с выбором минут
+        sent_message = bot.send_message(call.message.chat.id, "Теперь укажите минуты",
+                                        reply_markup=create_minute_keyboard(user_time[user_id]['minute']))
+        # Сохраняем новый ID сообщения для удаления после выбора минут
+        user_time[user_id]['message_id'] = sent_message.message_id
+        return
+
+    # Проверка, изменилось ли значение часов, чтобы избежать ошибки "message is not modified"
+    if previous_hour != user_time[user_id]['hour']:
+        bot.edit_message_reply_markup(
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=create_hour_keyboard(user_time[user_id]['hour'])
+        )
+
+
+@bot.callback_query_handler(
+    func=lambda call: call.data in ["add_five_minute", "add_one_minute", "minus_five_minute", "minus_one_minute",
+                                    "confirm_minute"])
+def handle_minute_buttons(call):
+    user_id = call.message.chat.id
+
+    # Инициализируем значение счётчика, если оно отсутствует
+    if user_id not in user_time:
+        user_time[user_id] = {'hour': datetime.now().hour, 'minute': 0}
+
+    previous_minute = user_time[user_id]['minute']  # Запоминаем текущее значение минут
+
+    # Обработка нажатия на кнопки для минут
+    if call.data == "add_five_minute":
+        user_time[user_id]['minute'] = (user_time[user_id]['minute'] + 5) % 60
+    elif call.data == "add_one_minute":
+        user_time[user_id]['minute'] = (user_time[user_id]['minute'] + 1) % 60
+    elif call.data == "minus_five_minute":
+        user_time[user_id]['minute'] = (user_time[user_id]['minute'] - 5) % 60 if user_time[user_id][
+                                                                                      'minute'] >= 5 else 0
+    elif call.data == "minus_one_minute":
+        user_time[user_id]['minute'] = (user_time[user_id]['minute'] - 1) % 60 if user_time[user_id][
+                                                                                      'minute'] > 0 else 0
+    elif call.data == "confirm_minute":
+        # Удаляем сообщение с выбором минут
+        bot.delete_message(call.message.chat.id, user_time[user_id]['message_id'])
+        bot.answer_callback_query(call.id,
+                                  f"Вы подтвердили время: {user_time[user_id]['hour']:02d}:{user_time[user_id]['minute']:02d}")
+        bot.send_message(call.message.chat.id,
+                         f"Вы выбрали время полета: {user_time[user_id]['hour']:02d}:{user_time[user_id]['minute']:02d}")
+        flight_data['time'] = f"{user_time[user_id]['hour']:02d}:{user_time[user_id]['minute']:02d}"
+        user_time.pop(user_id, None)  # Удаляем значение для пользователя после подтверждения
+        return
+
+    # Проверка, изменилось ли значение минут, чтобы избежать ошибки "message is not modified"
+    if previous_minute != user_time[user_id]['minute']:
+        bot.edit_message_reply_markup(
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=create_minute_keyboard(user_time[user_id]['minute'])
+        )

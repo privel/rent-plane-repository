@@ -12,9 +12,10 @@ from bot.management.commands.dep.commands import aerodrom_available, get_or_crea
     get_or_create_plane
 from bot.management.commands.dep.date.date_command import DateSelectionCommand
 from bot.management.commands.storage import STATE_MAIN_MENU, STATE_BOOK_CHOOSE_PLANE, STATE_BOOK_CHOOSE_DATE_ON_FLY, \
-    STATE_REGISTER_FLY, STATE_REGISTER_CHOOSE_AERODROM, STATE_SETTINGS, STATE_BOOK, user_state_stack, \
+    STATE_REGISTER_CHOOSE_AERODROM, STATE_SETTINGS, STATE_BOOK, user_state_stack, \
     user_booking, user_date_selection, available_booking_time, STATE_CHECK_ACTIVE_BOOKING, STATE_REGISTER_CHOOSE_DATE, \
-    flight_data, STATE_REGISTER_FLIGHT_DETAILS, STATE_REGISTER_FLIGHT_INIT, current_date
+    flight_data, STATE_REGISTER_FLIGHT_DETAILS, STATE_REGISTER_FLIGHT_INIT, current_date, user_counters, user_time, \
+    user_liters, STATE_REGISTER_CHOOSE_TIME, STATE_REGISTER_CHOOSE_LITERS, STATE_REGISTER_START_HOBBS
 from bot.models import Rent, Register_flight, Planes
 
 bot = telebot.TeleBot(settings.TOKEN)
@@ -214,19 +215,15 @@ def handle_calendar_selection_dateStart(call):
     date_selection_command.handle_calendar_selection(call, profile)
 
 
-
-
-
-
-
-
-
 def start_calendar(message):
     """Начинает процесс выбора даты, показывая календарь"""
+    push_user_state(message.from_user.id, STATE_REGISTER_CHOOSE_DATE)
+
     year = current_date.year
     month = current_date.month
     markup = generate_calendar(year, month)
     bot.send_message(message.chat.id, f"Выберите дату: {year}-{month:02}", reply_markup=markup)
+
 
 def generate_calendar(year, month):
     """Генерирует календарь на основе заданного года и месяца, выравнивая дни недели"""
@@ -241,7 +238,8 @@ def generate_calendar(year, month):
     markup.row(*row)
 
     # Дни недели
-    days_row = [types.InlineKeyboardButton(day, callback_data="ignore") for day in ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]]
+    days_row = [types.InlineKeyboardButton(day, callback_data="ignore") for day in
+                ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]]
     markup.row(*days_row)
 
     # Дни месяца с выравниванием
@@ -266,7 +264,6 @@ def generate_calendar(year, month):
     return markup
 
 
-
 @bot.callback_query_handler(func=lambda call: call.data.startswith("change_month"))
 def change_month(call):
     """Обработчик изменения месяца"""
@@ -280,9 +277,11 @@ def change_month(call):
             month = 1
             year += 1
         markup = generate_calendar(year, month)
-        bot.edit_message_text(f"Выберите дату: {year}-{month:02}", call.message.chat.id, call.message.message_id, reply_markup=markup)
+        bot.edit_message_text(f"Выберите дату: {year}-{month:02}", call.message.chat.id, call.message.message_id,
+                              reply_markup=markup)
     except ValueError:
         bot.answer_callback_query(call.id, "Ошибка при обработке данных. Попробуйте снова.")
+
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("select_date"))
 def select_date(call):
@@ -292,23 +291,24 @@ def select_date(call):
         year, month, day = int(year), int(month), int(day)
         selected_date = datetime(year, month, day).date()
         bot.edit_message_text(f"Вы выбрали дату: {selected_date}", call.message.chat.id, call.message.message_id)
+        flight_data['data'] = selected_date
+        select_time_register(call.message)
+
+
     except ValueError:
         bot.answer_callback_query(call.id, "Ошибка при обработке выбранной даты. Попробуйте снова.")
+
 
 @bot.callback_query_handler(func=lambda call: call.data == "back_to_menu")
 def back_to_menu(call):
     """Обработчик для кнопки 'Назад'"""
     bot.edit_message_text("Вы вернулись в меню.", call.message.chat.id, call.message.message_id)
 
+
 @bot.callback_query_handler(func=lambda call: call.data == "ignore")
 def ignore_callback(call):
     """Игнорирует нажатия на дни недели и прочие элементы интерфейса"""
     pass
-
-
-
-
-
 
 
 # Обработчик для команды "Регистрация полёта"
@@ -319,7 +319,6 @@ def start_register_flight(message):
     profile = get_or_create_profile(user_id, message.from_user.username)
 
     flight_data['profile'] = profile
-
 
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
     for plane in get_type_available_plane_second():
@@ -334,15 +333,235 @@ def start_register_flight(message):
 def handle_plane_selection(message):
     user_id = message.from_user.id
     current_state = get_current_user_state(user_id)
-
+    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    keyboard.add("Назад")
     flight_data['type_plane'] = get_or_create_plane(message.text[:-1])
-    print(flight_data)
+
     push_user_state(user_id, STATE_REGISTER_FLIGHT_DETAILS)
+    bot.send_message(message.chat.id, f"Вы выбрали тип: {message.text[:-1]}", reply_markup=keyboard)
     start_calendar(message)
 
 
+# def select_time_register(message):
+#     keyboard = types.InlineKeyboardMarkup()
+#     add_hour = types.InlineKeyboardButton(text="➕", callback_data="add_hour")
+#     hour_counter = types.InlineKeyboardButton(text="00", callback_data="hour_counter")
+#     minus_hour = types.InlineKeyboardButton(text="-", callback_data="minus_hour")
+#
+#     bot.send_message(message.chat.id, "Укажите время полёта",)
 
-# Сохранение данных полёта без бронирования
+
+def select_time_register(message):
+    push_user_state(message.from_user.id, STATE_REGISTER_CHOOSE_TIME)
+
+    user_id = message.chat.id
+    current_hour = datetime.now().hour  # Устанавливаем час на текущее время
+    # Инициализируем значение счётчиков для пользователя: текущий час и минуты
+    user_time[user_id] = {'hour': current_hour, 'minute': 0}
+
+    # Отправляем сообщение с кнопками для выбора часа
+    bot.send_message(
+        message.chat.id,
+        "Укажите время полёта \nУкажите час",
+        reply_markup=create_hour_keyboard(user_time[user_id]['hour'])
+    )
+
+
+def create_hour_keyboard(hour):
+    """Создаёт клавиатуру для установки часов"""
+    keyboard = types.InlineKeyboardMarkup()
+
+    # Кнопки для увеличения, уменьшения и подтверждения времени
+    add_five = types.InlineKeyboardButton(text="+5", callback_data="add_five_hour")
+    add_one = types.InlineKeyboardButton(text="+1", callback_data="add_one_hour")
+    hour_counter = types.InlineKeyboardButton(text=f"{hour:02d}", callback_data="hour_counter")
+    minus_five = types.InlineKeyboardButton(text="-5", callback_data="minus_five_hour")
+    minus_one = types.InlineKeyboardButton(text="-1", callback_data="minus_one_hour")
+    confirm = types.InlineKeyboardButton(text="Подтвердить", callback_data="confirm_hour")
+
+    # Добавляем кнопки в клавиатуру
+    keyboard.row(minus_five, hour_counter, add_five)
+    keyboard.row(minus_one, confirm, add_one)
+
+    return keyboard
+
+
+def create_minute_keyboard(minute):
+    """Создаёт клавиатуру для установки минут"""
+    keyboard = types.InlineKeyboardMarkup()
+
+    # Кнопки для увеличения/уменьшения на 5 и 1 минуту, а также подтверждение времени
+    add_five = types.InlineKeyboardButton(text="+5", callback_data="add_five_minute")
+    add_one = types.InlineKeyboardButton(text="+1", callback_data="add_one_minute")
+    minute_counter = types.InlineKeyboardButton(text=f"{minute:02d}", callback_data="minute_counter")
+    minus_five = types.InlineKeyboardButton(text="-5", callback_data="minus_five_minute")
+    minus_one = types.InlineKeyboardButton(text="-1", callback_data="minus_one_minute")
+    confirm = types.InlineKeyboardButton(text="Подтвердить", callback_data="confirm_minute")
+
+    # Добавляем кнопки в клавиатуру
+    keyboard.row(minus_five, minute_counter, add_five)
+    keyboard.row(minus_one, confirm, add_one)
+
+    return keyboard
+
+
+@bot.callback_query_handler(
+    func=lambda call: call.data in ["add_five_hour", "add_one_hour", "minus_five_hour", "minus_one_hour",
+                                    "confirm_hour"])
+def handle_hour_buttons(call):
+    user_id = call.message.chat.id
+
+    # Инициализируем значение счётчика, если оно отсутствует
+    if user_id not in user_time:
+        user_time[user_id] = {'hour': datetime.now().hour, 'minute': 0}
+
+    previous_hour = user_time[user_id]['hour']  # Запоминаем текущее значение
+
+    # Обработка нажатия на кнопки для часов
+    if call.data == "add_five_hour":
+        user_time[user_id]['hour'] = (user_time[user_id]['hour'] + 5) % 24
+    elif call.data == "add_one_hour":
+        user_time[user_id]['hour'] = (user_time[user_id]['hour'] + 1) % 24
+    elif call.data == "minus_five_hour":
+        user_time[user_id]['hour'] = (user_time[user_id]['hour'] - 5) % 24 if user_time[user_id]['hour'] >= 5 else 0
+    elif call.data == "minus_one_hour":
+        user_time[user_id]['hour'] = (user_time[user_id]['hour'] - 1) % 24 if user_time[user_id]['hour'] > 0 else 0
+    elif call.data == "confirm_hour":
+        bot.answer_callback_query(call.id, f"Вы подтвердили час: {user_time[user_id]['hour']:02d}")
+        # Удаляем сообщение с клавиатурой после подтверждения
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+        bot.send_message(call.message.chat.id, "Теперь укажите минуты",
+                         reply_markup=create_minute_keyboard(user_time[user_id]['minute']))
+
+
+    # Проверка, изменилось ли значение часов, чтобы избежать ошибки "message is not modified"
+    if previous_hour != user_time[user_id]['hour']:
+        bot.edit_message_reply_markup(
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=create_hour_keyboard(user_time[user_id]['hour'])
+        )
+
+
+@bot.callback_query_handler(
+    func=lambda call: call.data in ["add_five_minute", "add_one_minute", "minus_five_minute", "minus_one_minute",
+                                    "confirm_minute"])
+def handle_minute_buttons(call):
+    user_id = call.message.chat.id
+
+    # Инициализируем значение счётчика минут, если оно отсутствует
+    if user_id not in user_time:
+        user_time[user_id] = {'hour': datetime.now().hour, 'minute': 0}
+
+    previous_minute = user_time[user_id]['minute']  # Запоминаем текущее значение минут
+
+    # Обработка нажатия на кнопки для минут
+    if call.data == "add_five_minute":
+        user_time[user_id]['minute'] = (user_time[user_id]['minute'] + 5) % 60
+    elif call.data == "add_one_minute":
+        user_time[user_id]['minute'] = (user_time[user_id]['minute'] + 1) % 60
+    elif call.data == "minus_five_minute":
+        user_time[user_id]['minute'] = (user_time[user_id]['minute'] - 5) % 60 if user_time[user_id][
+                                                                                      'minute'] >= 5 else 0
+    elif call.data == "minus_one_minute":
+        user_time[user_id]['minute'] = (user_time[user_id]['minute'] - 1) % 60 if user_time[user_id][
+                                                                                      'minute'] > 0 else 0
+    elif call.data == "confirm_minute":
+        bot.answer_callback_query(call.id,
+                                  f"Вы подтвердили время: {user_time[user_id]['hour']:02d}:{user_time[user_id]['minute']:02d}")
+        # Удаляем сообщение с клавиатурой после подтверждения
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+        bot.send_message(call.message.chat.id,
+                         f"Вы выбрали время полета: {user_time[user_id]['hour']:02d}:{user_time[user_id]['minute']:02d}")
+        flight_data['time'] = f"{user_time[user_id]['hour']:02d}:{user_time[user_id]['minute']:02d}"
+        select_refueling_register(call.message)  # Переход к выбору литров заправки
+
+
+    # Проверка, изменилось ли значение минут, чтобы избежать ошибки "message is not modified"
+    if previous_minute != user_time[user_id]['minute']:
+        bot.edit_message_reply_markup(
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=create_minute_keyboard(user_time[user_id]['minute'])
+        )
+
+
+def select_refueling_register(message):
+    push_user_state(message.from_user.id, STATE_REGISTER_CHOOSE_LITERS)
+    user_id = message.chat.id
+    user_liters[user_id] = 0
+
+    bot.send_message(message.chat.id, "Сколько литров было заправлено ?",
+                     reply_markup=create_keyboard_for_refuling(user_liters[user_id]))
+
+
+def create_keyboard_for_refuling(liters):
+    keyboard = types.InlineKeyboardMarkup()
+
+    # Кнопки для увеличения, уменьшения и подтверждения времени
+    add_five = types.InlineKeyboardButton(text="+5", callback_data="add_five_liters")
+    add_one = types.InlineKeyboardButton(text="+1", callback_data="add_one_liter")
+    liters_counter = types.InlineKeyboardButton(text=f"{liters}", callback_data="liters_counter")
+    minus_five = types.InlineKeyboardButton(text="-5", callback_data="minus_five_liters")
+    minus_one = types.InlineKeyboardButton(text="-1", callback_data="minus_one_liter")
+    confirm = types.InlineKeyboardButton(text="Подтвердить", callback_data="confirm_liters")
+
+    # Добавляем кнопки в клавиатуру
+    keyboard.row(minus_five, liters_counter, add_five)
+    keyboard.row(minus_one, confirm, add_one)
+
+    return keyboard
+
+
+@bot.callback_query_handler(
+    func=lambda call: call.data in ["add_five_liters", "add_one_liter", "minus_five_liters", "minus_one_liter",
+                                    "confirm_liters"])
+def handle_refueling_buttons(call):
+    user_id = call.message.chat.id
+
+    # Инициализируем значение счётчика литров, если оно отсутствует
+    if user_id not in user_liters:
+        user_liters[user_id] = 0
+
+    previous_liters = user_liters[user_id]  # Запоминаем текущее значение литров
+
+    # Обработка нажатия на кнопки для литров
+    if call.data == "add_five_liters":
+        user_liters[user_id] += 5
+    elif call.data == "add_one_liter":
+        user_liters[user_id] += 1
+    elif call.data == "minus_five_liters":
+        user_liters[user_id] = max(0, user_liters[user_id] - 5)
+    elif call.data == "minus_one_liter":
+        user_liters[user_id] = max(0, user_liters[user_id] - 1)
+    elif call.data == "confirm_liters":
+        bot.answer_callback_query(call.id, f"Вы подтвердили количество литров: {user_liters[user_id]}")
+        # Удаляем сообщение с клавиатурой после подтверждения
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+        bot.send_message(call.message.chat.id, f"Вы выбрали количество литров: {user_liters[user_id]}")
+        flight_data['refueling'] = user_liters[user_id]
+
+        get_hobbs_start(call.message)
+
+
+    # Проверка, изменилось ли значение литров, чтобы избежать ошибки "message is not modified"
+    if previous_liters != user_liters[user_id]:
+        bot.edit_message_reply_markup(
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=create_keyboard_for_refuling(user_liters[user_id])
+        )
+
+
+def get_hobbs_start(message):
+    push_user_state(message.from_user.id,STATE_REGISTER_START_HOBBS)
+    bot.send_message(message.chat.id,"Введите значение HOBBS")
+
+
+@bot.message_handler(func=lambda message: get_current_user_state(message.chat.id) == STATE_REGISTER_START_HOBBS)
+def handle_hobbs_start(message):
+    bot.send_message(message.chat.id,f"Вы ввели {message.text}")
+
 def save_flight_data(message):
     user_id = message.from_user.id
     data = flight_data[user_id]
@@ -463,6 +682,19 @@ def handle_back(message):
 
     elif previous_state == STATE_BOOK_CHOOSE_DATE_ON_FLY:
         handle_book_choose_plane(message)  # Вернёт на выбор самолёта
+
+
+    elif previous_state == STATE_REGISTER_FLIGHT_DETAILS:
+        start_register_flight(message)
+
+    elif previous_state == STATE_REGISTER_CHOOSE_DATE:
+        start_calendar(message)
+
+    elif previous_state == STATE_REGISTER_CHOOSE_TIME:
+        select_time_register(message)
+
+    elif previous_state == STATE_REGISTER_CHOOSE_LITERS:
+        select_refueling_register(message)
 
 
 
