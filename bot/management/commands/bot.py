@@ -15,8 +15,13 @@ from bot.management.commands.storage import STATE_MAIN_MENU, STATE_BOOK_CHOOSE_P
     STATE_REGISTER_CHOOSE_AERODROM, STATE_SETTINGS, STATE_BOOK, user_state_stack, \
     user_booking, user_date_selection, available_booking_time, STATE_CHECK_ACTIVE_BOOKING, STATE_REGISTER_CHOOSE_DATE, \
     flight_data, STATE_REGISTER_FLIGHT_DETAILS, STATE_REGISTER_FLIGHT_INIT, current_date, user_counters, user_time, \
-    user_liters, STATE_REGISTER_CHOOSE_TIME, STATE_REGISTER_CHOOSE_LITERS, STATE_REGISTER_START_HOBBS
+    user_liters, STATE_REGISTER_CHOOSE_TIME, STATE_REGISTER_CHOOSE_LITERS, STATE_REGISTER_START_HOBBS, \
+    STATE_REGISTER_COUNT_LANDING, user_count_of_landing, STATE_REGISTER_CHOOSE_AERODROM_LANDING, \
+    STATE_REGISTER_END_HOBBS, STATE_REGISTER_COMMENT, STATE_REGISTER_COMMENT123
 from bot.models import Rent, Register_flight, Planes
+
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 
 bot = telebot.TeleBot(settings.TOKEN)
 
@@ -53,7 +58,8 @@ def push_user_state(user_id, state):
         user_state_stack[user_id] = []
     if state not in user_state_stack[user_id]:
         user_state_stack[user_id].append(state)
-    print(f"[DEBUG] PUSH: {user_id} -> {state} (stack: {user_state_stack[user_id]})")
+
+    print(f"\n [DEBUG] PUSH: {user_id} -> {state} (stack: {user_state_stack[user_id]})")
 
 
 def pop_user_state(user_id):
@@ -291,7 +297,7 @@ def select_date(call):
         year, month, day = int(year), int(month), int(day)
         selected_date = datetime(year, month, day).date()
         bot.edit_message_text(f"Вы выбрали дату: {selected_date}", call.message.chat.id, call.message.message_id)
-        flight_data['data'] = selected_date
+        flight_data[call.message.chat.id]['date'] = selected_date
         select_time_register(call.message)
 
 
@@ -318,7 +324,12 @@ def start_register_flight(message):
     push_user_state(user_id, STATE_REGISTER_FLIGHT_INIT)
     profile = get_or_create_profile(user_id, message.from_user.username)
 
-    flight_data['profile'] = profile
+    # Инициализируем flight_data[user_id] как словарь, если он не существует
+    if user_id not in flight_data:
+        flight_data[user_id] = {}
+
+    # Добавляем профиль в данные полета
+    flight_data[user_id]['profile'] = profile
 
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
     for plane in get_type_available_plane_second():
@@ -335,7 +346,7 @@ def handle_plane_selection(message):
     current_state = get_current_user_state(user_id)
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
     keyboard.add("Назад")
-    flight_data['type_plane'] = get_or_create_plane(message.text[:-1])
+    flight_data[message.from_user.id]['type_plane'] = get_or_create_plane(message.text[:-1])
 
     push_user_state(user_id, STATE_REGISTER_FLIGHT_DETAILS)
     bot.send_message(message.chat.id, f"Вы выбрали тип: {message.text[:-1]}", reply_markup=keyboard)
@@ -352,7 +363,7 @@ def handle_plane_selection(message):
 
 
 def select_time_register(message):
-    push_user_state(message.from_user.id, STATE_REGISTER_CHOOSE_TIME)
+    push_user_state(message.chat.id, STATE_REGISTER_CHOOSE_TIME)
 
     user_id = message.chat.id
     current_hour = datetime.now().hour  # Устанавливаем час на текущее время
@@ -433,7 +444,6 @@ def handle_hour_buttons(call):
         bot.send_message(call.message.chat.id, "Теперь укажите минуты",
                          reply_markup=create_minute_keyboard(user_time[user_id]['minute']))
 
-
     # Проверка, изменилось ли значение часов, чтобы избежать ошибки "message is not modified"
     if previous_hour != user_time[user_id]['hour']:
         bot.edit_message_reply_markup(
@@ -473,9 +483,10 @@ def handle_minute_buttons(call):
         bot.delete_message(call.message.chat.id, call.message.message_id)
         bot.send_message(call.message.chat.id,
                          f"Вы выбрали время полета: {user_time[user_id]['hour']:02d}:{user_time[user_id]['minute']:02d}")
-        flight_data['time'] = f"{user_time[user_id]['hour']:02d}:{user_time[user_id]['minute']:02d}"
-        select_refueling_register(call.message)  # Переход к выбору литров заправки
+        flight_data[call.message.chat.id][
+            'time'] = f"{user_time[user_id]['hour']:02d}:{user_time[user_id]['minute']:02d}"
 
+        select_refueling_register(call.message)  # Переход к выбору литров заправки
 
     # Проверка, изменилось ли значение минут, чтобы избежать ошибки "message is not modified"
     if previous_minute != user_time[user_id]['minute']:
@@ -487,7 +498,7 @@ def handle_minute_buttons(call):
 
 
 def select_refueling_register(message):
-    push_user_state(message.from_user.id, STATE_REGISTER_CHOOSE_LITERS)
+    push_user_state(message.chat.id, STATE_REGISTER_CHOOSE_LITERS)
     user_id = message.chat.id
     user_liters[user_id] = 0
 
@@ -499,15 +510,15 @@ def create_keyboard_for_refuling(liters):
     keyboard = types.InlineKeyboardMarkup()
 
     # Кнопки для увеличения, уменьшения и подтверждения времени
-    add_five = types.InlineKeyboardButton(text="+5", callback_data="add_five_liters")
+    add_ten = types.InlineKeyboardButton(text="+10", callback_data="add_five_liters")
     add_one = types.InlineKeyboardButton(text="+1", callback_data="add_one_liter")
     liters_counter = types.InlineKeyboardButton(text=f"{liters}", callback_data="liters_counter")
-    minus_five = types.InlineKeyboardButton(text="-5", callback_data="minus_five_liters")
+    minus_ten = types.InlineKeyboardButton(text="-10", callback_data="minus_five_liters")
     minus_one = types.InlineKeyboardButton(text="-1", callback_data="minus_one_liter")
     confirm = types.InlineKeyboardButton(text="Подтвердить", callback_data="confirm_liters")
 
     # Добавляем кнопки в клавиатуру
-    keyboard.row(minus_five, liters_counter, add_five)
+    keyboard.row(minus_ten, liters_counter, add_ten)
     keyboard.row(minus_one, confirm, add_one)
 
     return keyboard
@@ -527,11 +538,11 @@ def handle_refueling_buttons(call):
 
     # Обработка нажатия на кнопки для литров
     if call.data == "add_five_liters":
-        user_liters[user_id] += 5
+        user_liters[user_id] += 10
     elif call.data == "add_one_liter":
         user_liters[user_id] += 1
     elif call.data == "minus_five_liters":
-        user_liters[user_id] = max(0, user_liters[user_id] - 5)
+        user_liters[user_id] = max(0, user_liters[user_id] - 10)
     elif call.data == "minus_one_liter":
         user_liters[user_id] = max(0, user_liters[user_id] - 1)
     elif call.data == "confirm_liters":
@@ -539,12 +550,10 @@ def handle_refueling_buttons(call):
         # Удаляем сообщение с клавиатурой после подтверждения
         bot.delete_message(call.message.chat.id, call.message.message_id)
         bot.send_message(call.message.chat.id, f"Вы выбрали количество литров: {user_liters[user_id]}")
-        flight_data['refueling'] = user_liters[user_id]
+        flight_data[call.message.chat.id]['refueling'] = user_liters[user_id]
 
         get_hobbs_start(call.message)
 
-
-    # Проверка, изменилось ли значение литров, чтобы избежать ошибки "message is not modified"
     if previous_liters != user_liters[user_id]:
         bot.edit_message_reply_markup(
             call.message.chat.id,
@@ -554,17 +563,199 @@ def handle_refueling_buttons(call):
 
 
 def get_hobbs_start(message):
-    push_user_state(message.from_user.id,STATE_REGISTER_START_HOBBS)
-    bot.send_message(message.chat.id,"Введите значение HOBBS")
+    push_user_state(message.chat.id, STATE_REGISTER_START_HOBBS)
+    bot.send_message(message.chat.id, "Введите значение HOBBS пример (12345.67)")
 
 
-@bot.message_handler(func=lambda message: get_current_user_state(message.chat.id) == STATE_REGISTER_START_HOBBS)
+# Обработчик для значения HOBBS
+@bot.message_handler(func=lambda message: get_current_user_state(message.from_user.id) == STATE_REGISTER_START_HOBBS)
 def handle_hobbs_start(message):
-    bot.send_message(message.chat.id,f"Вы ввели {message.text}")
+    print(f"[DEBUG] Handling HOBBS input for user {message.chat.id}")
+    hobbs_start_value = message.text  # Получаем введенное значение
+    try:
+        # Проверяем, что введенное значение является числом
+        hobbs_start_value = float(hobbs_start_value)
+        flight_data[message.chat.id]['hobbs_start'] = hobbs_start_value
+        print()
+        print(f"[DEBUG] HOBBS start value set to {hobbs_start_value} for user {message.from_user.id}")
 
+        bot.send_message(message.chat.id, f"Вы ввели значение HOBBS: {hobbs_start_value}")
+        pop_user_state(message.from_user.id)
+        print()
+        print(f"[DEBUG] State popped for user {message.from_user.id}")
+
+        select_aerodrome_start(message)
+
+    except ValueError:
+        # Если введено не число, запрашиваем ввод снова
+        bot.send_message(message.chat.id, "Пожалуйста, введите числовое значение HOBBS.")
+        print()
+        print(f"[DEBUG] Invalid input for HOBBS by user {message.from_user.id}")
+
+
+# Функция для запроса ввода аэродрома
+def select_aerodrome_start(message):
+    push_user_state(message.chat.id, STATE_REGISTER_CHOOSE_AERODROM)
+    bot.send_message(message.chat.id, "Введите название аэродрома отправления")
+
+
+# Обработчик для ввода названия аэродрома
+@bot.message_handler(
+    func=lambda message: get_current_user_state(message.from_user.id) == STATE_REGISTER_CHOOSE_AERODROM)
+def handle_aerodrome_start(message):
+    push_user_state(message.chat.id, STATE_REGISTER_COUNT_LANDING)
+    aerodrome_name = message.text
+    flight_data[message.chat.id]['aerodrome_start'] = aerodrome_name
+
+
+
+    bot.send_message(message.chat.id, f"Вы ввели название аэродрома: {aerodrome_name}")
+    select_count_of_landing(message)
+
+
+def select_count_of_landing(message):
+
+    user_count_of_landing[message.chat.id] = 0
+
+    bot.send_message(message.chat.id, "теперь укажите количество посадок ",
+                     reply_markup=create_keyboard_count_of_landing(user_count_of_landing[message.chat.id]))
+
+
+def create_keyboard_count_of_landing(counter):
+    keyboard = types.InlineKeyboardMarkup()
+
+    # Кнопки для увеличения, уменьшения и подтверждения времени
+
+    add_one = types.InlineKeyboardButton(text="+1", callback_data="add_one_landing")
+    liters_counter = types.InlineKeyboardButton(text=f"{counter}", callback_data="landing_counter")
+    minus_one = types.InlineKeyboardButton(text="-1", callback_data="minus_one_landing")
+    confirm = types.InlineKeyboardButton(text="Подтвердить", callback_data="confirm_landing")
+
+    # Добавляем кнопки в клавиатуру
+    keyboard.row(minus_one, liters_counter, add_one)
+    keyboard.row(confirm)
+
+    return keyboard
+
+
+@bot.callback_query_handler(
+    func=lambda call: call.data in ["add_one_landing", "landing_counter", "minus_one_landing", "confirm_landing"])
+def handle_refueling_buttons(call):
+    user_id = call.message.chat.id
+
+    # Инициализируем значение счётчика литров, если оно отсутствует
+    if user_id not in user_count_of_landing:
+        user_count_of_landing[user_id] = 0
+
+    previous_landing_count =  user_count_of_landing[user_id]  # Запоминаем текущее значение литров
+
+
+    if call.data == "add_one_landing":
+        user_count_of_landing[user_id] += 1
+    elif call.data == "minus_one_landing":
+        user_count_of_landing[user_id] = max(0,  user_count_of_landing[user_id] - 1)
+    elif call.data == "confirm_landing":
+        bot.answer_callback_query(call.id, f"Вы подтвердили количество посадок: { user_count_of_landing[user_id]}")
+        # Удаляем сообщение с клавиатурой после подтверждения
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+        bot.send_message(call.message.chat.id, f"Вы выбрали количество посадок: { user_count_of_landing[user_id]}")
+        flight_data[call.message.chat.id]['number_of_landings'] =  user_count_of_landing[user_id]
+        print()
+        print(flight_data)
+        select_aerodrome_end(call.message)
+
+
+
+    if previous_landing_count !=  user_count_of_landing[user_id]:
+        bot.edit_message_reply_markup(
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=create_keyboard_count_of_landing( user_count_of_landing[user_id])
+        )
+
+
+def select_aerodrome_end(message):
+    push_user_state(message.chat.id, STATE_REGISTER_CHOOSE_AERODROM_LANDING)
+    bot.send_message(message.chat.id, "Введите название аэродрома посадки")
+    print()
+    print(f"[DEBUG] State set to STATE_REGISTER_AERODROME_END for user {message.chat.id}")
+
+
+# Обработчик для ввода названия аэродрома
+@bot.message_handler(
+    func=lambda message: get_current_user_state(message.from_user.id) == STATE_REGISTER_CHOOSE_AERODROM_LANDING)
+def handle_aerodrome_end(message):
+
+    aerodrome_name = message.text
+    flight_data[message.chat.id]['aerodrome_end'] = aerodrome_name
+
+    bot.send_message(message.chat.id, f"Вы ввели название аэродрома: {aerodrome_name}")
+    get_hobbs_end(message)
+
+
+
+def get_hobbs_end(message):
+    push_user_state(message.chat.id, STATE_REGISTER_END_HOBBS)
+    bot.send_message(message.chat.id, "Введите конечное значение HOBBS пример (12345.67)")
+
+
+# Обработчик для значения HOBBS
+@bot.message_handler(func=lambda message: get_current_user_state(message.from_user.id) == STATE_REGISTER_END_HOBBS)
+def handle_hobbs_end(message):
+
+    hobbs_end_value = message.text  # Получаем введенное значение
+    try:
+        # Проверяем, что введенное значение является числом
+        hobbs_start_value = float(hobbs_end_value)
+        flight_data[message.chat.id]['hobbs_end'] = hobbs_start_value
+        bot.send_message(message.chat.id, f"Вы ввели значение HOBBS: {hobbs_start_value}")
+        add_comments_for_register(message)
+        
+
+    except ValueError:
+        # Если введено не число, запрашиваем ввод снова
+        bot.send_message(message.chat.id, "Пожалуйста, введите конечное числовое значение HOBBS.")
+        print()
+        print(f"[DEBUG] Invalid input for HOBBS by user {message.from_user.id}")
+
+
+
+def add_comments_for_register(message):
+    push_user_state(message.chat.id, STATE_REGISTER_COMMENT123)
+
+    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    keyboard.add("Оставить комментарий")
+    keyboard.add("Сохранить")
+
+    flight_data[message.chat.id]['commentary'] = "Нет"
+
+    bot.send_message(message.chat.id, "Теперь оставьте комментарий \n"
+                                      "Если хотите сохранить без комментария нажмите сохранить", reply_markup=keyboard)
+
+
+@bot.message_handler(func=lambda message: (message.text == "Оставить комментарий") and (get_current_user_state(message.from_user.id) == STATE_REGISTER_COMMENT123) )
+def handle_paste_comments(message):
+    push_user_state(message.chat.id, STATE_REGISTER_COMMENT)
+    bot.send_message(message.chat.id, "Напишите ниже ваш комментарий", reply_markup=types.ReplyKeyboardRemove())
+
+
+@bot.message_handler(func=lambda message: get_current_user_state(message.from_user.id) == STATE_REGISTER_COMMENT)
+def comments(message):
+    comments = message.text
+
+    flight_data[message.chat.id]['commentary'] = comments
+    bot.send_message(message.chat.id, "Ваш ответ сохранён, данные внесены в базу")
+
+    save_flight_data(message)
+
+
+
+@bot.message_handler(func=lambda message: message.text == "Сохранить")
 def save_flight_data(message):
     user_id = message.from_user.id
+
     data = flight_data[user_id]
+
 
     Register_flight.objects.create(
         profile=data['profile'],
@@ -573,16 +764,17 @@ def save_flight_data(message):
         time=data['time'],
         refueling=data['refueling'],
         hobbs_start=data['hobbs_start'],
-        aerodrom_start=data['aerodrom_start'],
+        aerodrom_start=data['aerodrome_start'],
         number_of_landings=data['number_of_landings'],
-        aerodrom_end=data['aerodrom_end'],
+        aerodrom_end=data['aerodrome_end'],
         hobbs_end=data['hobbs_end'],
         commentary=data['commentary']
     )
 
     bot.send_message(message.chat.id, "Регистрация полёта завершена и сохранена!")
-    flight_data.clear()
+    flight_data[user_id].clear()
     show_main_menu(message)
+    print(flight_data)
 
 
 @bot.message_handler(func=lambda message: message.text == "Настройки")
