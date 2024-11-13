@@ -1,7 +1,11 @@
+import logging
+import time
 from datetime import datetime, timedelta
 from pyexpat.errors import messages
 
+import pytz
 import telebot
+
 from telebot import types
 from django.conf import settings
 from django.core.management.base import BaseCommand
@@ -17,11 +21,8 @@ from bot.management.commands.storage import STATE_MAIN_MENU, STATE_BOOK_CHOOSE_P
     flight_data, STATE_REGISTER_FLIGHT_DETAILS, STATE_REGISTER_FLIGHT_INIT, current_date, user_counters, user_time, \
     user_liters, STATE_REGISTER_CHOOSE_TIME, STATE_REGISTER_CHOOSE_LITERS, STATE_REGISTER_START_HOBBS, \
     STATE_REGISTER_COUNT_LANDING, user_count_of_landing, STATE_REGISTER_CHOOSE_AERODROM_LANDING, \
-    STATE_REGISTER_END_HOBBS, STATE_REGISTER_COMMENT, STATE_REGISTER_COMMENT123
+    STATE_REGISTER_END_HOBBS, STATE_REGISTER_COMMENT, STATE_REGISTER_COMMENT123, STATE_REGISTER_FLIGHT_AUTO
 from bot.models import Rent, Register_flight, Planes
-
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
 
 bot = telebot.TeleBot(settings.TOKEN)
 
@@ -228,7 +229,10 @@ def start_calendar(message):
     year = current_date.year
     month = current_date.month
     markup = generate_calendar(year, month)
-    bot.send_message(message.chat.id, f"Выберите дату: {year}-{month:02}", reply_markup=markup)
+    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    keyboard.add("Назад")
+    bot.send_message(message.chat.id, f"Теперь выберите дату:", reply_markup=keyboard)
+    bot.send_message(message.chat.id, f"{year}-{month:02}", reply_markup=markup)
 
 
 def generate_calendar(year, month):
@@ -266,7 +270,7 @@ def generate_calendar(year, month):
         markup.row(*days)
 
     # Кнопка назад
-    markup.row(types.InlineKeyboardButton("Назад", callback_data="back_to_menu"))
+    # markup.row(types.InlineKeyboardButton("Назад", callback_data="back_to_menu"))
     return markup
 
 
@@ -298,6 +302,7 @@ def select_date(call):
         selected_date = datetime(year, month, day).date()
         bot.edit_message_text(f"Вы выбрали дату: {selected_date}", call.message.chat.id, call.message.message_id)
         flight_data[call.message.chat.id]['date'] = selected_date
+
         select_time_register(call.message)
 
 
@@ -345,21 +350,54 @@ def handle_plane_selection(message):
     user_id = message.from_user.id
     current_state = get_current_user_state(user_id)
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    keyboard.add("Заполнить дату и время")
+    keyboard.add("Автозаполнение даты и времени")
     keyboard.add("Назад")
     flight_data[message.from_user.id]['type_plane'] = get_or_create_plane(message.text[:-1])
 
     push_user_state(user_id, STATE_REGISTER_FLIGHT_DETAILS)
-    bot.send_message(message.chat.id, f"Вы выбрали тип: {message.text[:-1]}", reply_markup=keyboard)
+    bot.send_message(message.chat.id, f"Вы выбрали тип: {message.text[:-1]} \n"
+                                      f"", reply_markup=keyboard)
+
+
+@bot.message_handler(func=lambda message: message.text in ["Заполнить дату", "Заполнить в ручную"])
+def handle_edit_date(message):
+    push_user_state(message.chat.id, STATE_REGISTER_FLIGHT_AUTO)
     start_calendar(message)
 
 
-# def select_time_register(message):
-#     keyboard = types.InlineKeyboardMarkup()
-#     add_hour = types.InlineKeyboardButton(text="➕", callback_data="add_hour")
-#     hour_counter = types.InlineKeyboardButton(text="00", callback_data="hour_counter")
-#     minus_hour = types.InlineKeyboardButton(text="-", callback_data="minus_hour")
-#
-#     bot.send_message(message.chat.id, "Укажите время полёта",)
+@bot.message_handler(func=lambda message: message.text == "Автозаполнение даты и времени")
+def handle_auto_date(message):
+    selected_date = datetime(current_date.year, current_date.month, current_date.day).date()
+
+    moscow_tz = pytz.timezone('Europe/Moscow')
+    c = datetime.now(moscow_tz)
+    time_now = c.strftime('%H:%M')
+
+    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    keyboard.add("Подтвердить")
+    keyboard.add("Заполнить в ручную")
+    keyboard.add("Назад")
+
+    bot.send_message(message.chat.id, f"Автозаполнение даты: {selected_date} \n"
+                                      f" Время: {time_now} \n"
+                                      f"Подтвердите дату и время", reply_markup=keyboard)
+
+
+@bot.message_handler(func=lambda message: message.text == "Подтвердить")
+def handle_aproved_date_auto(message):
+    selected_date = datetime(current_date.year, current_date.month, current_date.day).date()
+    moscow_tz = pytz.timezone('Europe/Moscow')
+    c = datetime.now(moscow_tz)
+    time_now = c.strftime('%H:%M')
+    flight_data[message.chat.id]['date'] = selected_date
+    flight_data[message.chat.id]['time'] = time_now
+    bot.send_message(message.chat.id, "Вы успешно подтвердили дату и время",
+                     reply_markup=types.ReplyKeyboardMarkup(resize_keyboard=True).add("Назад"))
+
+    select_refueling_register(message)
+
+    # select_time_register(message)
 
 
 def select_time_register(message):
@@ -607,14 +645,11 @@ def handle_aerodrome_start(message):
     aerodrome_name = message.text
     flight_data[message.chat.id]['aerodrome_start'] = aerodrome_name
 
-
-
     bot.send_message(message.chat.id, f"Вы ввели название аэродрома: {aerodrome_name}")
     select_count_of_landing(message)
 
 
 def select_count_of_landing(message):
-
     user_count_of_landing[message.chat.id] = 0
 
     bot.send_message(message.chat.id, "теперь укажите количество посадок ",
@@ -647,30 +682,27 @@ def handle_refueling_buttons(call):
     if user_id not in user_count_of_landing:
         user_count_of_landing[user_id] = 0
 
-    previous_landing_count =  user_count_of_landing[user_id]  # Запоминаем текущее значение литров
-
+    previous_landing_count = user_count_of_landing[user_id]  # Запоминаем текущее значение литров
 
     if call.data == "add_one_landing":
         user_count_of_landing[user_id] += 1
     elif call.data == "minus_one_landing":
-        user_count_of_landing[user_id] = max(0,  user_count_of_landing[user_id] - 1)
+        user_count_of_landing[user_id] = max(0, user_count_of_landing[user_id] - 1)
     elif call.data == "confirm_landing":
-        bot.answer_callback_query(call.id, f"Вы подтвердили количество посадок: { user_count_of_landing[user_id]}")
+        bot.answer_callback_query(call.id, f"Вы подтвердили количество посадок: {user_count_of_landing[user_id]}")
         # Удаляем сообщение с клавиатурой после подтверждения
         bot.delete_message(call.message.chat.id, call.message.message_id)
-        bot.send_message(call.message.chat.id, f"Вы выбрали количество посадок: { user_count_of_landing[user_id]}")
-        flight_data[call.message.chat.id]['number_of_landings'] =  user_count_of_landing[user_id]
+        bot.send_message(call.message.chat.id, f"Вы выбрали количество посадок: {user_count_of_landing[user_id]}")
+        flight_data[call.message.chat.id]['number_of_landings'] = user_count_of_landing[user_id]
         print()
         print(flight_data)
         select_aerodrome_end(call.message)
 
-
-
-    if previous_landing_count !=  user_count_of_landing[user_id]:
+    if previous_landing_count != user_count_of_landing[user_id]:
         bot.edit_message_reply_markup(
             call.message.chat.id,
             call.message.message_id,
-            reply_markup=create_keyboard_count_of_landing( user_count_of_landing[user_id])
+            reply_markup=create_keyboard_count_of_landing(user_count_of_landing[user_id])
         )
 
 
@@ -685,13 +717,11 @@ def select_aerodrome_end(message):
 @bot.message_handler(
     func=lambda message: get_current_user_state(message.from_user.id) == STATE_REGISTER_CHOOSE_AERODROM_LANDING)
 def handle_aerodrome_end(message):
-
     aerodrome_name = message.text
     flight_data[message.chat.id]['aerodrome_end'] = aerodrome_name
 
     bot.send_message(message.chat.id, f"Вы ввели название аэродрома: {aerodrome_name}")
     get_hobbs_end(message)
-
 
 
 def get_hobbs_end(message):
@@ -702,7 +732,6 @@ def get_hobbs_end(message):
 # Обработчик для значения HOBBS
 @bot.message_handler(func=lambda message: get_current_user_state(message.from_user.id) == STATE_REGISTER_END_HOBBS)
 def handle_hobbs_end(message):
-
     hobbs_end_value = message.text  # Получаем введенное значение
     try:
         # Проверяем, что введенное значение является числом
@@ -710,14 +739,13 @@ def handle_hobbs_end(message):
         flight_data[message.chat.id]['hobbs_end'] = hobbs_start_value
         bot.send_message(message.chat.id, f"Вы ввели значение HOBBS: {hobbs_start_value}")
         add_comments_for_register(message)
-        
+
 
     except ValueError:
         # Если введено не число, запрашиваем ввод снова
         bot.send_message(message.chat.id, "Пожалуйста, введите конечное числовое значение HOBBS.")
         print()
         print(f"[DEBUG] Invalid input for HOBBS by user {message.from_user.id}")
-
 
 
 def add_comments_for_register(message):
@@ -733,7 +761,8 @@ def add_comments_for_register(message):
                                       "Если хотите сохранить без комментария нажмите сохранить", reply_markup=keyboard)
 
 
-@bot.message_handler(func=lambda message: (message.text == "Оставить комментарий") and (get_current_user_state(message.from_user.id) == STATE_REGISTER_COMMENT123) )
+@bot.message_handler(func=lambda message: (message.text == "Оставить комментарий") and (
+        get_current_user_state(message.from_user.id) == STATE_REGISTER_COMMENT123))
 def handle_paste_comments(message):
     push_user_state(message.chat.id, STATE_REGISTER_COMMENT)
     bot.send_message(message.chat.id, "Напишите ниже ваш комментарий", reply_markup=types.ReplyKeyboardRemove())
@@ -749,13 +778,11 @@ def comments(message):
     save_flight_data(message)
 
 
-
 @bot.message_handler(func=lambda message: message.text == "Сохранить")
 def save_flight_data(message):
     user_id = message.from_user.id
 
     data = flight_data[user_id]
-
 
     Register_flight.objects.create(
         profile=data['profile'],
@@ -854,7 +881,8 @@ def handle_cancel_booking(call):
 @bot.message_handler(func=lambda message: message.text == "Отмена")
 def handle_cancel(message):
     user_booking.clear()
-    flight_data.clear()
+    flight_data[message.chat.id].clear()
+    print(flight_data)
     print("Cancel")
     show_main_menu(message)
 
@@ -875,8 +903,12 @@ def handle_back(message):
     elif previous_state == STATE_BOOK_CHOOSE_DATE_ON_FLY:
         handle_book_choose_plane(message)  # Вернёт на выбор самолёта
 
+    elif previous_state == STATE_REGISTER_FLIGHT_INIT:
+        start_register_flight(message)
 
     elif previous_state == STATE_REGISTER_FLIGHT_DETAILS:
+        start_register_flight(message)
+    elif previous_state == STATE_REGISTER_FLIGHT_AUTO:
         start_register_flight(message)
 
     elif previous_state == STATE_REGISTER_CHOOSE_DATE:
@@ -897,9 +929,18 @@ def handle_back(message):
 
         show_main_menu(message)
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 class Command(BaseCommand):
     help = "Запуск Telegram бота"
 
     def handle(self, *args, **options):
-        bot.polling(none_stop=True)
+        while True:
+            try:
+                logger.info("Запуск бота...")
+                bot.polling(none_stop=True, interval=1, timeout=60)
+            except Exception as e:
+                logger.error(f"Ошибка: {e}")
+                logger.info("Перезапуск через 5 секунд...")
+                time.sleep(5)  # Пауза перед перезапуском
